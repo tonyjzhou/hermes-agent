@@ -78,6 +78,7 @@ except (ImportError, AttributeError):
 
 try:
     from hermes_cli.pt_input_extras import (
+        install_char_key_insert_text_patch,
         install_cmd_backspace_alias,
         install_ctrl_enter_alias,
         install_ignored_terminal_sequences,
@@ -89,7 +90,11 @@ try:
     install_cmd_backspace_alias()
     install_modify_other_keys_aliases()
     install_ignored_terminal_sequences()
-    del install_shift_enter_alias, install_ctrl_enter_alias, install_cmd_backspace_alias, install_modify_other_keys_aliases, install_ignored_terminal_sequences
+    # Must accompany the alias installs above: entries mapped to a literal
+    # character (Shift+letter, Shift+Space, keypad keys) otherwise insert the
+    # raw escape sequence instead of the character.
+    install_char_key_insert_text_patch()
+    del install_shift_enter_alias, install_ctrl_enter_alias, install_cmd_backspace_alias, install_modify_other_keys_aliases, install_ignored_terminal_sequences, install_char_key_insert_text_patch
 except Exception:
     pass
 import threading

@@ -495,6 +495,102 @@ def install_modify_other_keys_aliases() -> int:
     return changed
 
 
+def _legacy_byte_for_keys() -> dict:
+    """Map each ``Keys.*`` member to the single raw byte that also produces it.
+
+    Derived from the stock one-character ``ANSI_SEQUENCES`` entries (``\\x03``
+    → ControlC, ``\\r`` → ControlM, ``\\x1b`` → Escape, …), so it tracks
+    whatever prompt_toolkit ships rather than a hand-written table that would
+    drift. Keys with no legacy byte (arrows, F-keys, kitty PUA keys) are
+    absent and left alone.
+    """
+    try:
+        from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
+        from prompt_toolkit.keys import Keys
+    except Exception:
+        return {}
+
+    legacy: dict = {}
+    for seq, value in ANSI_SEQUENCES.items():
+        if len(seq) == 1 and isinstance(value, Keys):
+            legacy.setdefault(value, seq)
+    return legacy
+
+
+def install_char_key_insert_text_patch() -> int:
+    """Make extended key encodings deliver the same text payload the legacy
+    encoding delivers, instead of their own escape sequence.
+
+    ``Vt100Parser._call_handler`` emits ``KeyPress(key, insert_text)`` where
+    ``insert_text`` is *the matched byte sequence*, never the mapped value.
+    prompt_toolkit's ``self-insert`` binding inserts ``event.data`` — the
+    sequence — not ``event.key``, and it is registered against ``Keys.Any``,
+    so it catches any keypress no other binding claimed.  Every alias this
+    module installs therefore carried a wrong payload:
+
+    * **Character-valued entries** typed their sequence.  Shift+letter under
+      modifyOtherKeys (``ESC[27;2;65~``) produced the literal text
+      ``^[[27;2;65~`` instead of ``A`` — the "uppercase is garbage" symptom on
+      every Ghostty/iTerm2/kitty/WezTerm/VS Code/tmux session where
+      ``_enable_extended_enter_keys`` pushes ``ESC[>4;2m``.  Shift+Space and
+      lock-bit Space leaked ``^[[27;2;32~`` / ``^[[32;129u``; kitty keypad PUA
+      keys leaked ``^[[57399u`` instead of typing ``0``.
+    * **Tuple entries** such as Alt+letter ``(Escape, "a")`` inserted
+      *nothing*: ``_call_handler`` hands the payload to the first element only,
+      so the character element received ``""``.
+    * **``Keys.*`` entries with no binding** fell through to ``Keys.Any`` and
+      typed the sequence.  Ctrl+Z is the live case — the legacy ``\\x1a`` byte
+      self-inserts an invisible control character, while ``ESC[27;5;122~``
+      self-inserted visible junk.
+
+    Fixing this in ``ANSI_SEQUENCES`` is impossible — the table only carries
+    the key, and the payload is chosen by the parser.  So patch the parser:
+
+    * a plain ``str`` key (not a ``Keys`` member — ``Keys`` subclasses ``str``,
+      so the distinction matters) IS the text, and becomes the payload;
+    * a ``Keys`` member with a legacy single-byte spelling gets that byte, so
+      the extended encoding is indistinguishable from the legacy one.
+
+    Untouched: keys that already carry their own text (a normal ``a``
+    keystroke, where key and data are both ``"a"``), the empty payload
+    ``_call_handler`` gives non-first tuple elements to avoid double
+    insertion, and the ``BracketedPaste`` path.
+
+    Class-level and idempotent: one patch covers every parser instance,
+    including those prompt_toolkit creates internally.
+
+    Returns 1 if the patch was installed, 0 if it was already present or
+    prompt_toolkit is unavailable.
+    """
+    try:
+        from prompt_toolkit.input import vt100_parser as _vt100_mod
+        from prompt_toolkit.keys import Keys
+    except Exception:
+        return 0
+
+    parser_cls = _vt100_mod.Vt100Parser
+    if getattr(parser_cls, "_hermes_char_key_data_patched", False):
+        return 0
+
+    original_call_handler = parser_cls._call_handler
+    legacy_byte = _legacy_byte_for_keys()
+
+    def _patched_call_handler(self, key, insert_text):
+        if insert_text and insert_text != key:
+            if isinstance(key, Keys):
+                # Only rewrite payloads that came from an escape sequence; a
+                # legacy byte already delivers itself.
+                if len(insert_text) > 1:
+                    insert_text = legacy_byte.get(key, insert_text)
+            elif isinstance(key, str) and len(key) == 1:
+                insert_text = key
+        return original_call_handler(self, key, insert_text)
+
+    parser_cls._call_handler = _patched_call_handler
+    parser_cls._hermes_char_key_data_patched = True
+    return 1
+
+
 def install_ignored_terminal_sequences() -> int:
     """Map terminal-emitted noise sequences to ``Keys.Ignore`` so they
     are consumed by the VT100 parser before they reach key bindings or
