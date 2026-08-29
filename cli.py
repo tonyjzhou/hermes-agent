@@ -4521,12 +4521,20 @@ def _strip_leaked_terminal_responses_with_meta(text: str) -> tuple[str, bool]:
     lands in the input buffer as literal text and corrupts what the user
     typed.
 
-    Also strips leaked SGR mouse-report fragments (``ESC[<...M/m`` and
+    Also strips/decodes leaked xterm modifyOtherKeys and Kitty CSI-u escape
+    sequences (e.g. Shift+Q leaking as ``^[[27;2;81~`` or ``[27;2;81~``),
+    and strips leaked SGR mouse-report fragments (``ESC[<...M/m`` and
     degraded visible forms). Returns ``(cleaned_text, had_mouse_reports)``
     so callers can trigger an in-place terminal mode recovery when needed.
     """
     if not text:
         return text, False
+
+    try:
+        from hermes_cli.input_sanitize import strip_or_decode_leaked_xterm_sequences
+        text = strip_or_decode_leaked_xterm_sequences(text)
+    except Exception:
+        pass
 
     has_esc = "\x1b[" in text
     has_visible = "^[" in text

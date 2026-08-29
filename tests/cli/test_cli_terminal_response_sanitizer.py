@@ -40,3 +40,9 @@ class TestStripLeakedTerminalResponses:
         text = "<65;1;49M<35;1;42Mhello<64;1;40m"
         assert _strip_leaked_terminal_responses(text) == "hello"
 
+    def test_decodes_leaked_xterm_modify_other_keys_in_input(self):
+        assert _strip_leaked_terminal_responses("^[[27;2;81~") == "Q"
+        assert _strip_leaked_terminal_responses("Hello ^[[27;2;81~uality") == "Hello Quality"
+        assert _strip_leaked_terminal_responses("[27;2;81~") == "Q"
+        assert _strip_leaked_terminal_responses("^[[27;5;99~") == ""
+
