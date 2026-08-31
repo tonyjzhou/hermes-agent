@@ -346,6 +346,8 @@ def install_modify_other_keys_aliases() -> int:
         nonlocal changed
         for codepoint, key_val in mapping.items():
             seqs = [] if modifier == 1 else [f"\x1b[27;{modifier};{codepoint}~"]
+            if modifier == 1:
+                seqs.append(f"\x1b[{codepoint}u")
             for mod in _lock_variants(modifier):
                 seqs.append(f"\x1b[{codepoint};{mod}u")
             for seq in seqs:
@@ -368,19 +370,19 @@ def install_modify_other_keys_aliases() -> int:
         alt_map[ch - 32] = (Keys.Escape, upper)
     _install_paired(3, alt_map)
 
-    # -- Shift+letter → uppercase letter ----
-    # Under modifyOtherKeys=2, some terminals re-encode Shift+a as
-    # ESC[27;2;97~. Without mapping, this leaks as literal escape +
-    # "[27;2;97~" in the prompt buffer — the "caps locked" / "every key
-    # combo is broken" symptom (#87711).
-    # Map Shift+letter to the uppercase character so typing works normally.
-    # This is safe across all Latin keyboard layouts: Shift always uppercases
-    # letters.  Shift+digit symbols are layout-specific (US: '!', AZERTY: '¹',
-    # etc.) so they are NOT mapped here — if the terminal sends those under
-    # modifyOtherKeys, they will leak, but that's better than wrong input.
-    # Map both the lowercase and uppercase codepoints — some terminals send
-    # the already-shifted codepoint (65 for 'A') with modifier=2.
+    # -- Shift+letter → uppercase letter, Shift+printable → printable char ----
+    # Under modifyOtherKeys=2 and CSI-u, terminals re-encode Shift+key combos.
+    # For letters, Shift+a is ESC[27;2;97~ or ESC[97;2u -> 'A'.
+    # For symbols and shifted characters (like '@' = 64, '!' = 33, etc.),
+    # terminals emit the resolved symbol's codepoint with modifier=2 (e.g.
+    # ESC[27;2;64~ or ESC[64;2u). Without mapping, these leak as literal
+    # escape sequences like "[27;2;64~" into the prompt buffer (#87711).
+    # Map all printable ASCII characters: letters uppercase, symbols as-is.
+    # Map both lowercase and uppercase codepoints for letters.
     shift_map: dict[int, str] = {}
+    for cp in range(32, 127):
+        if not (ord('a') <= cp <= ord('z') or ord('A') <= cp <= ord('Z')):
+            shift_map[cp] = chr(cp)
     for ch in range(ord('a'), ord('z') + 1):
         upper_char = chr(ch - 32)  # 'A'..'Z'
         shift_map[ch] = upper_char
@@ -448,19 +450,18 @@ def install_modify_other_keys_aliases() -> int:
                                             # matching Ink TUI + Desktop (#78285)
     })
 
-    # -- Unmodified keys with a lock bit set (kitty modifier 1 = "none") --
-    # With a lock on, kitty stamps the lock bit onto keys pressed with NO
-    # real modifier too, so plain Backspace arrives as ESC[127;129u
-    # (1 + 128) rather than \x7f. _install_paired(1, ...) registers the
-    # bare mod-1 spelling and its lock twins. Only keys kitty CSI-u-encodes
-    # on their own are listed; plain text characters are still delivered
-    # as UTF-8, lock bits or not.
-    _install_paired(1, {
+    # -- Unmodified keys with a lock bit set or bare CSI-u (modifier 1 = "none") --
+    # With a lock on or in disambiguate mode, kitty/ghostty emit CSI-u for
+    # keys pressed with NO real modifier too. Map printable ASCII (32..126)
+    # plus control keys so bare ESC[<CP>u and lock-bit variants parse properly.
+    mod1_map: dict[int, object] = {
         9: Keys.ControlI,     # Tab
         13: Keys.ControlM,    # Enter
-        32: " ",              # Space
         127: Keys.ControlH,   # Backspace
-    })
+    }
+    for cp in range(32, 127):
+        mod1_map[cp] = chr(cp)
+    _install_paired(1, mod1_map)
 
     # -- Lock-key modifier bits (NumLock=128, CapsLock=64) on the legacy
     # CSI-letter / CSI-tilde forms kitty keeps using under the disambiguate

@@ -264,6 +264,29 @@ def test_modify_other_keys_shift_letter_produces_uppercase(letter):
     )
 
 
+# ---------------------------------------------------------------------------
+# Shift+symbol / shifted printable characters (e.g. '@' = 64)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("symbol", ["@", "!", "#", "$", "%", "^", "&", "*", "(", ")", "?", "~", ":", "+", "_"])
+def test_modify_other_keys_shift_symbol_produces_character(symbol):
+    """Shift+<symbol> (e.g. '@' = 64) under modifyOtherKeys and CSI-u must
+    produce the character itself, not leak as literal escape text."""
+    codepoint = ord(symbol)
+    mok_seq = f"\x1b[27;2;{codepoint}~"
+    assert _parse(mok_seq) == [symbol], (
+        f"modifyOtherKeys Shift+{symbol} ({mok_seq!r}) should produce {symbol!r}"
+    )
+    csiu_seq = f"\x1b[{codepoint};2u"
+    assert _parse(csiu_seq) == [symbol], (
+        f"CSI-u Shift+{symbol} ({csiu_seq!r}) should produce {symbol!r}"
+    )
+    csiu_bare = f"\x1b[{codepoint}u"
+    assert _parse(csiu_bare) == [symbol], (
+        f"CSI-u bare {symbol} ({csiu_bare!r}) should produce {symbol!r}"
+    )
+
+
 def test_does_not_clobber_shift_enter_alias():
     """install_modify_other_keys_aliases must not overwrite mappings
     installed by install_shift_enter_alias (modifier=2, not 5)."""
