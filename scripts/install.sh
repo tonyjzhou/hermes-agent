@@ -2625,10 +2625,10 @@ configure_browser_env_from_system_browser() {
 # A bare `npm install` at the repo root resolves package.json's `apps/*`
 # glob, which materializes apps/desktop — and with it node-pty, which ships
 # no Linux prebuild and falls back to `node-gyp rebuild`. On a host without
-# make/gcc that rebuild fails, and since #85297 made a failed npm install
-# fatal it aborts the whole install of a machine that will never launch
-# Electron or a PTY addon (#38311, #38772). Desktop dependencies are
-# installed by install_desktop(), reachable only via --include-desktop.
+# make/gcc that rebuild fails, leaving a machine that will never launch
+# Electron or a PTY addon (#38311, #38772) with broken or missing
+# node_modules. Desktop dependencies are installed by install_desktop(),
+# reachable only via --include-desktop.
 #
 # Naming ui-tui/web excludes the unnamed apps/* workspaces, and
 # --include-workspace-root keeps the root's own devDependencies (the shared
@@ -2668,8 +2668,13 @@ install_node_deps() {
         # Time-boxed: a stalled registry fetch would otherwise hang here with no
         # progress (same #39219 stall class as the desktop build below).
         # A failed npm install used to still print "✓ Node.js dependencies
-        # installed", hiding the degradation from the user (#77003). Now it
-        # fails the install outright instead of burying the warning (#85297).
+        # installed", hiding the degradation from the user (#77003) — so
+        # report success only on actual success. The failure itself stays a
+        # warning, not a fatal error: the Python agent, venv, and entry point
+        # are already installed and fully usable without these optional
+        # browser-tool JS dependencies, and a transient registry outage must
+        # not abort an otherwise working install (nor strand `hermes update`,
+        # which already treats the same step as a retryable partial failure).
         # Capture npm output so failures are diagnosable (#87340).
         # Scoped to the workspaces a CLI install needs so apps/desktop's
         # node-pty is never built here — see node_deps_workspace_args().
@@ -2678,17 +2683,17 @@ install_node_deps() {
         npm_log="$(mktemp)"
         if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm install "${NODE_DEPS_WORKSPACE_ARGS[@]}" --silent \
                 >"$npm_log" 2>&1; then
-            log_error "npm install failed or timed out; Node.js dependencies were not installed"
+            log_warn "npm install failed or timed out (browser tools may not work)"
             if [ -s "$npm_log" ]; then
-                log_error "npm output:"
+                log_warn "npm output:"
                 cat "$npm_log" >&2
             fi
             rm -f "$npm_log"
             restore_dirty_lockfiles "$INSTALL_DIR"
-            return 1
+        else
+            rm -f "$npm_log"
+            log_success "Node.js dependencies installed"
         fi
-        rm -f "$npm_log"
-        log_success "Node.js dependencies installed"
 
         # Install Playwright browser + system dependencies.
         # Playwright's --with-deps only supports apt-based systems natively.
@@ -2787,24 +2792,25 @@ install_node_deps() {
         log_info "Installing TUI dependencies..."
         cd "$INSTALL_DIR/ui-tui"
         # Time-boxed: a stalled registry fetch would otherwise hang here (#39219).
-        # Report success only on actual success, same as node-deps above
-        # (#77003) — and fail the install outright (#85297).
+        # Report success only on actual success (#77003), but keep the failure
+        # a warning like the browser-tool install above: the core agent works
+        # without the TUI bundle, and `hermes update` retries this step.
         # Capture npm output so failures are diagnosable (#87340).
         local tui_npm_log
         tui_npm_log="$(mktemp)"
         if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm install --silent \
                 >"$tui_npm_log" 2>&1; then
-            log_error "TUI npm install failed or timed out; TUI dependencies were not installed"
+            log_warn "TUI npm install failed or timed out (hermes --tui may not work)"
             if [ -s "$tui_npm_log" ]; then
-                log_error "npm output:"
+                log_warn "npm output:"
                 cat "$tui_npm_log" >&2
             fi
             rm -f "$tui_npm_log"
             restore_dirty_lockfiles "$INSTALL_DIR"
-            return 1
+        else
+            rm -f "$tui_npm_log"
+            log_success "TUI dependencies installed"
         fi
-        rm -f "$tui_npm_log"
-        log_success "TUI dependencies installed"
     fi
 
     # Keep the checkout clean so `hermes update` doesn't autostash every run.
@@ -3735,7 +3741,7 @@ run_stage_body() {
             resolve_install_layout
             require_install_dir
             check_node
-            install_node_deps || return
+            install_node_deps
             install_uv
             install_browser_use_cli
             install_computer_use_driver
@@ -3854,7 +3860,7 @@ main() {
     clone_repo
     setup_venv
     install_deps
-    install_node_deps || return
+    install_node_deps
     install_browser_use_cli
     install_computer_use_driver
     setup_path
