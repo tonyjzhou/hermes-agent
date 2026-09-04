@@ -1,4 +1,12 @@
-"""Behavioral coverage for required Node dependency installation."""
+"""Behavioral coverage for best-effort Node dependency installation.
+
+The browser-tool and TUI ``npm install`` steps are optional: the Python
+agent, venv, and entry point are already installed and fully usable without
+them, so a registry outage must degrade to a warning (retryable by
+re-running the installer or by ``hermes update``), never abort the install.
+Success is still reported honestly — no "✓ ... installed" line prints unless
+that step actually succeeded (#77003).
+"""
 
 from __future__ import annotations
 
@@ -92,7 +100,7 @@ def _stage_result(proc: subprocess.CompletedProcess[str]) -> dict[str, object]:
     return json.loads(proc.stdout.splitlines()[-1])
 
 
-def test_root_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
+def test_root_node_dependency_failure_warns_and_continues(tmp_path: Path) -> None:
     install_dir = tmp_path / "install"
     proc, actual_install_dir, calls = _run_node_deps_stage(
         tmp_path,
@@ -100,20 +108,21 @@ def test_root_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
     )
 
     assert actual_install_dir == install_dir
-    assert proc.returncode != 0
+    assert proc.returncode == 0, proc.stderr
     assert _stage_result(proc) == {
-        "ok": False,
+        "ok": True,
         "stage": "node-deps",
         "skipped": False,
-        "reason": "exit code 1",
     }
-    assert calls == [str(install_dir)]
+    # The TUI step still runs after a root failure.
+    assert calls == [str(install_dir), str(install_dir / "ui-tui")]
+    assert "npm install failed or timed out (browser tools may not work)" in proc.stdout
     assert "Node.js dependencies installed" not in proc.stdout
-    assert "TUI dependencies installed" not in proc.stdout
+    assert "TUI dependencies installed" in proc.stdout
     assert not (install_dir / "node_modules").exists()
 
 
-def test_tui_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
+def test_tui_node_dependency_failure_warns_and_continues(tmp_path: Path) -> None:
     install_dir = tmp_path / "install"
     tui_dir = install_dir / "ui-tui"
     proc, _, calls = _run_node_deps_stage(
@@ -121,10 +130,11 @@ def test_tui_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
         fail_directory=str(tui_dir),
     )
 
-    assert proc.returncode != 0
-    assert _stage_result(proc)["ok"] is False
+    assert proc.returncode == 0, proc.stderr
+    assert _stage_result(proc)["ok"] is True
     assert calls == [str(install_dir), str(tui_dir)]
     assert "Node.js dependencies installed" in proc.stdout
+    assert "TUI npm install failed or timed out (hermes --tui may not work)" in proc.stdout
     assert "TUI dependencies installed" not in proc.stdout
 
 

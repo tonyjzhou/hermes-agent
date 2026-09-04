@@ -3,9 +3,8 @@
 ``apps/desktop`` declares ``node-pty``, which ships no Linux prebuild and so
 falls back to ``node-gyp rebuild``. A bare ``npm install`` at the repo root
 resolves the root ``apps/*`` workspace glob and drags it in, so a host with no
-make/gcc cannot finish an install for a machine that will never launch Electron
-or a PTY addon (#38311, #38772). Since #85297 a failed npm install aborts the
-whole install, so this is the difference between a working CLI install and none.
+make/gcc ends up with broken node_modules for a machine that will never launch
+Electron or a PTY addon (#38311, #38772).
 
 These exercise the real ``node_deps_workspace_args`` from ``scripts/install.sh``.
 ``--manifest`` makes the installer print its stage manifest and stop before
